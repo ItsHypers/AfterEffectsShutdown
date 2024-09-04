@@ -9,7 +9,7 @@ import psutil
 
 
 # Path to the directory where After Effects renders output
-OUTPUT_DIR = r"D:\Videos\Call of Duty  Modern Warfare 3 (2023)\Editing\DysEp\Render"  # Change this to your actual output directory
+OUTPUT_DIR = r"YOUR VIDEO FOLDER"  # Change this to your actual output directory
 
 # Debug mode variable
 DEBUG_MODE = False  # Set to True to enable debugging mode
