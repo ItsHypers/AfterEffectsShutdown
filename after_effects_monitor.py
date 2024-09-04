@@ -1,108 +1,124 @@
-import psutil
 import os
+import time
 import tkinter as tk
 from tkinter import ttk
-import time
-import threading
 import subprocess
 import platform
+import threading
+import psutil
+
 
 # Path to the directory where After Effects renders output
-OUTPUT_DIR = "C:/path/to/your/output/folder"  # Change this to your actual output directory
+OUTPUT_DIR = r"D:\Videos\Call of Duty  Modern Warfare 3 (2023)\Editing\DysEp\Render"  # Change this to your actual output directory
 
-# Countdown settings
-COUNTDOWN_START = 10  # Start countdown from 10 seconds
-SHUTDOWN_COUNTDOWN = 10  # Countdown before shutting down the PC
+# Debug mode variable
+DEBUG_MODE = False  # Set to True to enable debugging mode
 
-# Threshold settings
-FILE_SIZE_THRESHOLD = 1024  # 1 KB change to detect rendering activity
-CHECK_INTERVAL = 2  # Interval in seconds to check for rendering activity
+# Initialize global variables
+render_stopped_time = None
+rendering = False
+last_file_times = {}
+shutdown_scheduled = False
 
 def close_after_effects():
-    """Function to close After Effects."""
+    """Function to wait 10 seconds, then close After Effects and shut down the PC if MP4 files are found."""
+    mp4_files = [f for f in os.listdir(OUTPUT_DIR) if f.lower().endswith('.mp4')]
+    
+    if mp4_files:
+        update_gui_message("MP4 files found. Waiting 10 seconds before proceeding.")
+        root.after(10000, proceed_after_effects)  # Wait 10 seconds before proceeding
+    else:
+        update_gui_message("No MP4 files found. Continuing to check rendering status.")
+        start_checking_rendering()  # Continue checking rendering status
+
+def proceed_after_effects():
+    """Proceed with closing After Effects or debugging based on DEBUG_MODE."""
+    if DEBUG_MODE:
+        update_gui_message("DEBUG MODE: Detected MP4 files. Skipping closing After Effects and shutdown.")
+        print("DEBUG MODE: Detected MP4 files. Skipping closing After Effects and shutdown.")
+    else:
+        terminate_after_effects()
+
+def terminate_after_effects():
+    """Terminate After Effects gracefully and then forcefully if necessary."""
+    update_gui_message("Attempting to close After Effects...")
+    print("DEBUG MODE: Attempting to close After Effects...")
     for process in psutil.process_iter(['pid', 'name']):
         if process.info['name'].lower() == "afterfx.exe":
             process.terminate()  # Graceful termination
             time.sleep(3)  # Wait a moment to allow process termination
             if process.is_running():
                 process.kill()  # Force kill if it didn't terminate
-            print("After Effects has been closed.")
+            update_gui_message("After Effects has been closed.")
+            print("DEBUG MODE: After Effects has been closed.")
+            if not DEBUG_MODE:
+                start_shutdown_countdown()  # Start shutdown countdown if not in debugging mode
             break
 
+def update_gui_message(message):
+    """Update the GUI with a new message."""
+    root.after(0, lambda: message_var.set(message))
+
+def update_gui_values(file_activity):
+    """Update the GUI values for file activity."""
+    root.after(0, lambda: file_activity_var.set("Detected" if file_activity else "Not Detected"))
+
 def is_rendering_by_file_activity():
-    """Check if rendering is happening by monitoring file size and modification time."""
-    try:
-        file_activity = False
-        for filename in os.listdir(OUTPUT_DIR):
-            filepath = os.path.join(OUTPUT_DIR, filename)
-            if os.path.isfile(filepath):
-                # Check both file size and last modification time
-                current_size = os.path.getsize(filepath)
-                last_modified = os.path.getmtime(filepath)
-                time.sleep(CHECK_INTERVAL)  # Wait a moment to detect changes
-                new_size = os.path.getsize(filepath)
-                new_modified = os.path.getmtime(filepath)
-                
-                if (new_size > current_size + FILE_SIZE_THRESHOLD) or (new_modified > last_modified):
-                    file_activity = True
-                    break
-        return file_activity
-    except Exception as e:
-        print(f"Error monitoring output directory: {e}")
-        return False
+    """Check if rendering is happening by monitoring file activity using polling."""
+    global last_file_times
+
+    file_activity_detected = False
+    for filename in os.listdir(OUTPUT_DIR):
+        file_path = os.path.join(OUTPUT_DIR, filename)
+        if os.path.isfile(file_path):
+            current_mtime = os.path.getmtime(file_path)
+            if filename in last_file_times:
+                if current_mtime != last_file_times[filename]:
+                    file_activity_detected = True
+                    last_file_times[filename] = current_mtime
+            else:
+                last_file_times[filename] = current_mtime
+
+    return file_activity_detected
+
+def check_mp4_file():
+    """Check if MP4 files are present in the output folder."""
+    return any(f.lower().endswith('.mp4') for f in os.listdir(OUTPUT_DIR))
 
 def update_status():
     global render_stopped_time, rendering
 
     while True:
-        if is_rendering_by_file_activity():
-            status_var.set("Yes")
-            countdown_var.set("")  # Clear the countdown display
-            shutdown_var.set("")  # Clear shutdown display
-            rendering = True
-            render_stopped_time = None  # Reset the stop timer since rendering is ongoing
-        else:
-            if rendering:
+        try:
+            file_activity = is_rendering_by_file_activity()
+            if file_activity:
+                rendering = True
+                update_gui_values(True)
+                root.after(0, lambda: status_var.set("Yes"))
+                render_stopped_time = None  # Reset the stop timer since rendering is ongoing
+            else:
                 if render_stopped_time is None:
                     render_stopped_time = time.time()
                 elif time.time() - render_stopped_time >= 10:
-                    # Rendering has been stopped for 10 seconds
-                    rendering = False
-                    start_countdown(COUNTDOWN_START)
-            else:
-                # If countdown is active, display its value
-                if countdown is not None:
-                    countdown_var.set(f"Closing After Effects in {countdown} seconds...")
-                elif shutdown_countdown is not None:
-                    shutdown_var.set(f"Shutting down PC in {shutdown_countdown} seconds...")
+                    close_after_effects()
+                    render_stopped_time = None  # Reset after handling
+                    continue
 
-        # Sleep a little before next check to avoid excessive CPU usage
-        time.sleep(1)
+            time.sleep(1)  # Adjust sleep time as needed to balance responsiveness and CPU usage
+        except Exception as e:
+            update_gui_message(f"Error: {e}")
+            break
 
-def start_countdown(seconds_left):
-    """Starts a non-blocking countdown and closes After Effects when it reaches zero."""
-    global countdown
-    countdown = seconds_left
+def start_checking_rendering():
+    """Continue checking rendering status without GUI countdown."""
+    status_thread = threading.Thread(target=update_status, daemon=True)
+    status_thread.start()
 
-    if countdown > 0:
-        countdown_var.set(f"Closing After Effects in {countdown} seconds...")
-        countdown -= 1
-        root.after(1000, start_countdown, countdown)
-    else:
-        close_after_effects()
-        start_shutdown_countdown(SHUTDOWN_COUNTDOWN)
-
-def start_shutdown_countdown(seconds_left):
-    """Starts a non-blocking shutdown countdown and shuts down the PC when it reaches zero."""
-    global shutdown_countdown
-    shutdown_countdown = seconds_left
-
-    if shutdown_countdown > 0:
-        shutdown_var.set(f"Shutting down PC in {shutdown_countdown} seconds...")
-        shutdown_countdown -= 1
-        root.after(1000, start_shutdown_countdown, shutdown_countdown)
-    else:
-        shutdown_pc()
+def start_shutdown_countdown():
+    """Start the countdown to shut down the PC."""
+    update_gui_message("Shutting down PC in 10 seconds...")
+    print("DEBUG MODE: Shutting down PC in 10 seconds...")
+    root.after(10000, shutdown_pc)
 
 def shutdown_pc():
     """Shut down the PC."""
@@ -114,13 +130,8 @@ def shutdown_pc():
     elif system_platform == "Darwin":
         subprocess.call(["sudo", "shutdown", "-h", "now"])  # macOS shutdown
     else:
-        print("Unsupported OS for shutdown.")
-    root.destroy()  # Close the GUI
-
-def start_monitoring():
-    # Start the update_status function in a separate thread
-    monitor_thread = threading.Thread(target=update_status, daemon=True)
-    monitor_thread.start()
+        update_gui_message("Unsupported OS for shutdown.")
+    root.quit()  # Close the Tkinter event loop
 
 # GUI setup
 root = tk.Tk()
@@ -130,27 +141,24 @@ frame = ttk.Frame(root, padding="10")
 frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
 status_var = tk.StringVar(value="No")
-countdown_var = tk.StringVar(value="")  # Countdown display variable
-shutdown_var = tk.StringVar(value="")  # Shutdown display variable
+file_activity_var = tk.StringVar(value="Not Detected")  # File activity display variable
+message_var = tk.StringVar(value="")  # General message display variable
 
-ttk.Label(frame, text="Is After Effects Rendering?").grid(row=0, column=0, padx=5, pady=5)
+ttk.Label(frame, text="Is After Effects Rendering?").grid(row=0, column=0, padx=5, pady=5, sticky="w")
 status_label = ttk.Label(frame, textvariable=status_var, font=("Helvetica", 16))
-status_label.grid(row=0, column=1, padx=5, pady=5)
+status_label.grid(row=0, column=1, padx=5, pady=5, sticky="w")
 
-countdown_label = ttk.Label(frame, textvariable=countdown_var, font=("Helvetica", 12))
-countdown_label.grid(row=1, column=0, columnspan=2, pady=5)
+ttk.Label(frame, text="File Activity:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
+file_activity_label = ttk.Label(frame, textvariable=file_activity_var, font=("Helvetica", 12))
+file_activity_label.grid(row=1, column=1, padx=5, pady=5, sticky="w")
 
-shutdown_label = ttk.Label(frame, textvariable=shutdown_var, font=("Helvetica", 12))
-shutdown_label.grid(row=2, column=0, columnspan=2, pady=5)
+ttk.Label(frame, text="Message:").grid(row=2, column=0, padx=5, pady=5, sticky="w")
+message_label = ttk.Label(frame, textvariable=message_var, font=("Helvetica", 10), wraplength=300)
+message_label.grid(row=2, column=1, padx=5, pady=5, sticky="w")
 
-# Initialize variables
-render_stopped_time = None  # To keep track of when rendering stopped
-rendering = False  # Flag to indicate if rendering was happening
-countdown = None  # Countdown timer for After Effects
-shutdown_countdown = None  # Countdown timer for shutdown
+# Start monitoring
+start_checking_rendering()
 
-# Start monitoring in a separate thread
-start_monitoring()
-
-# Start the GUI loop
+# Start the Tkinter event loop
+print("Starting Tkinter main loop...")
 root.mainloop()
