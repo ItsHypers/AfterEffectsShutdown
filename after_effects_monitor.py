@@ -7,12 +7,16 @@ import threading
 import subprocess
 import platform
 
-
 # Path to the directory where After Effects renders output
-OUTPUT_DIR = "CHANGE TO YOUR OUTPUT"  # EXAMPLE D:\Editing\AmazingEpisode
+OUTPUT_DIR = "C:/path/to/your/output/folder"  # Change this to your actual output directory
+
 # Countdown settings
 COUNTDOWN_START = 10  # Start countdown from 10 seconds
 SHUTDOWN_COUNTDOWN = 10  # Countdown before shutting down the PC
+
+# Threshold settings
+FILE_SIZE_THRESHOLD = 1024  # 1 KB change to detect rendering activity
+CHECK_INTERVAL = 2  # Interval in seconds to check for rendering activity
 
 def close_after_effects():
     """Function to close After Effects."""
@@ -26,15 +30,20 @@ def close_after_effects():
             break
 
 def is_rendering_by_file_activity():
+    """Check if rendering is happening by monitoring file size and modification time."""
     try:
         file_activity = False
         for filename in os.listdir(OUTPUT_DIR):
             filepath = os.path.join(OUTPUT_DIR, filename)
             if os.path.isfile(filepath):
+                # Check both file size and last modification time
                 current_size = os.path.getsize(filepath)
-                time.sleep(1)  # Wait a moment to detect changes
+                last_modified = os.path.getmtime(filepath)
+                time.sleep(CHECK_INTERVAL)  # Wait a moment to detect changes
                 new_size = os.path.getsize(filepath)
-                if new_size > current_size:
+                new_modified = os.path.getmtime(filepath)
+                
+                if (new_size > current_size + FILE_SIZE_THRESHOLD) or (new_modified > last_modified):
                     file_activity = True
                     break
         return file_activity
